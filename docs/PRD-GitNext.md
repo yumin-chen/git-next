@@ -25,6 +25,17 @@ GitNext is a next-generation Git implementation written in pure Rust, designed t
 
 ## Requirements
 
+### Non-Goals for V1
+
+The following features are explicitly excluded from the initial GitNext implementation to maintain focus and deliverability:
+
+- **Reflog Compatibility**: GitNext operation log replaces traditional reflog functionality
+- **Git Hooks Execution**: Hook systems are deferred to later versions
+- **Porcelain UI Parity**: Focus on core plumbing operations, not user interface commands
+- **SSH Authentication**: HTTPS-only for initial protocol support
+- **Advanced Protocol Features**: Smart protocol negotiation beyond basic clone/fetch/push
+- **Git Notes Support**: Unless explicitly enabled, notes are not preserved during import/export
+
 ### Requirement 1: Repository Management Operations
 
 **User Story:** As a developer, I want to perform standard Git operations (init, clone, commit, branch, merge), so that I can manage my code repositories effectively.
@@ -49,9 +60,14 @@ GitNext is a next-generation Git implementation written in pure Rust, designed t
 3. THE GitNext_System SHALL support SQLite backend for local file-based storage
 4. THE GitNext_System SHALL support PostgreSQL backend for distributed and multi-user scenarios
 5. THE GitNext_System SHALL support IndexedDB backend for browser-based WASM environments
-6. THE GitNext_System SHALL support S3-compatible storage for cloud-native deployments
-7. WHEN switching storage backends, THE GitNext_System SHALL maintain identical API behavior
+6. THE GitNext_System SHALL support S3-compatible storage for cloud-native deployments with eventual consistency semantics
+7. WHEN switching between strongly consistent storage backends, THE GitNext_System SHALL maintain identical API behavior
 8. THE GitNext_System SHALL allow runtime selection of storage backends without code changes
+
+#### Storage Consistency Guarantees
+
+- **Strong Consistency**: Memory, SQLite, PostgreSQL backends provide full ACID guarantees
+- **Eventual Consistency**: S3-compatible backends provide weaker consistency with explicit trade-offs documented
 
 ### Requirement 3: Git Protocol Compatibility
 
@@ -62,9 +78,15 @@ GitNext is a next-generation Git implementation written in pure Rust, designed t
 1. WHEN pushing to remote repositories, THE GitNext_System SHALL use standard Git protocol communication
 2. WHEN pulling from remote repositories, THE GitNext_System SHALL fetch and integrate changes using Git protocol
 3. THE GitNext_System SHALL handle Git packfile format for efficient data transfer
-4. THE GitNext_System SHALL support SSH and HTTPS authentication methods
-5. THE GitNext_System SHALL maintain compatibility with Git object formats (commits, trees, blobs, tags)
-6. WHEN interacting with Git servers, THE GitNext_System SHALL negotiate protocol versions appropriately
+4. THE GitNext_System SHALL support HTTPS authentication methods for basic interoperability
+5. THE GitNext_System SHALL maintain compatibility with Git object formats at import/export boundaries only
+6. WHEN interacting with Git servers, THE GitNext_System SHALL support essential protocol capabilities for clone/fetch/push operations
+
+#### Non-Goals for V1
+
+- SSH authentication support (deferred to later versions)
+- Advanced protocol negotiation features
+- Full Git protocol capability matrix
 
 ### Requirement 4: Operation Logging and Undo/Redo
 
@@ -73,11 +95,16 @@ GitNext is a next-generation Git implementation written in pure Rust, designed t
 #### Acceptance Criteria
 
 1. WHEN performing any repository operation, THE GitNext_System SHALL record the operation in the Operation_Log
-2. WHEN undoing an operation, THE GitNext_System SHALL restore the previous repository state
-3. WHEN redoing an operation, THE GitNext_System SHALL reapply the previously undone operation
+2. WHEN undoing a conflict-free operation, THE GitNext_System SHALL restore the previous repository state
+3. WHEN redoing a conflict-free operation, THE GitNext_System SHALL reapply the previously undone operation
 4. THE GitNext_System SHALL maintain operation history across application restarts
-5. THE GitNext_System SHALL support undo/redo for all mutation operations (commit, branch, merge, etc.)
+5. THE GitNext_System SHALL support undo/redo for all mutation operations (commit, branch, merge, etc.) that do not involve conflict resolution
 6. WHEN operation log becomes large, THE GitNext_System SHALL provide log compaction mechanisms
+
+#### V1 Scope Limitations
+
+- Undo/redo guarantees apply only to conflict-free operations
+- Complex merge conflict states may have limited undo support
 
 ### Requirement 5: Indexed Query System
 
