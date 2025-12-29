@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Workspace dependencies
+serde = { workspace = true }
+blake3 = { workspace = true }
+bytes = { workspace = true }
+bincode = { workspace = true }
+
+# Crate-specific dependencies
+uuid = { version = "1.7.0", features = ["v4", "serde"] }
+ulid = { version = "1.1.2", features = ["serde"] }
+hex = "0.4.3"
+chrono = { version = "0.4.38", features = ["serde"] }
+whoami = "1.5.1"
+sha1 = "0.10.6"
