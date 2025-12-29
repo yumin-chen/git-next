@@ -1,0 +1,75 @@
+# Cargo.toml workspace structure
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/gitnext-core",           # Core data model
+    "crates/gitnext-storage",        # Storage abstraction
+    "crates/gitnext-storage-memory", # In-memory backend
+    "crates/gitnext-storage-sqlite", # SQLite backend
+    "crates/gitnext-storage-indexeddb", # Browser backend
+    "crates/gitnext-storage-postgres",  # Server backend
+    "crates/gitnext-storage-s3",     # Cloud backend
+    "crates/gitnext-objects",        # Object model
+    "crates/gitnext-operations",     # High-level operations
+    "crates/gitnext-merge",          # Merge algorithms
+    "crates/gitnext-query",          # Query layer
+    "crates/gitnext-identity",       # Artifact tracking
+    "crates/gitnext-protocol",       # Git wire protocol
+    "crates/gitnext-compat",         # Git compatibility layer
+    "crates/gitnext-cli",            # CLI tool
+    "crates/gitnext-wasm",           # WASM bindings
+    "crates/gitnext-server",         # Git server
+]
+
+[workspace.dependencies]
+# Core
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+bytes = { version = "1.5", features = ["serde"] }
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialisation
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+prost = "0.12"      # Protobuf
+postcard = "1.0"    # Compact binary format
+
+# Hashing
+blake3 = "1.5"
+sha2 = "0.10"       # For Git compat
+
+# Storage
+sqlx = { version = "0.7", features = ["sqlite", "postgres", "runtime-tokio"] }
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Compression
+zstd = "0.13"
+lz4 = "1.24"
+
+# Parallelism
+rayon = "1.8"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# WASM
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Performance"] }
+
+# Testing
+proptest = "1.4"
+criterion = "0.5"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"     # Optimize for size
