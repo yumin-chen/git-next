@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Local dependencies
+gitnext-core = { path = "../gitnext-core" }
+gitnext-storage = { path = "../gitnext-storage" }
+
+# Workspace dependencies
+async-trait = { workspace = true }
+sqlx = { workspace = true }
+bincode = { workspace = true }
+
+# Crate-specific dependencies
+chrono = "0.4.38"
+serde_json = "1.0.117"
+ulid = "1.1.2"
