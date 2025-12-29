@@ -41,10 +41,17 @@ The following architectural decisions define GitNext's core design principles:
 - **Undo/Redo**: Implemented via operation replay/reversal, not heuristic ref manipulation
 - **Rationale**: Guarantees recoverability and enables deterministic history replay
 
-**ADR-004: Artifact Tracking as Orthogonal Layer**
-- **Stable Identifiers**: Artifacts (functions, types, modules) have stable IDs independent of file paths
-- **Non-Intrusive**: Artifact metadata doesn't affect Git object hashes or compatibility
-- **Rationale**: Enables semantic analysis while preserving Git compatibility
+**ADR-005: Canonical Serialization and Hash Derivation**
+- **Canonical Serialization**: All GitNext objects have deterministic, platform-independent serialization
+- **Primary Identity**: BLAKE3(canonical_serialization) for all internal operations
+- **Git Hash Derivation**: GitHash = SHA-1/SHA-256(git_serialization(canonical_object))
+- **Boundary Enforcement**: Canonical format internal only, Git format at boundaries only
+
+**ADR-006: Git Import/Export Compatibility Contract**
+- **Faithful Reconstruction**: Git → GitNext → Git preserves commit DAG, file contents, references
+- **Import Guarantees**: All Git objects, metadata, and topology preserved during import
+- **Export Guarantees**: Exported repositories pass git fsck and work with standard Git
+- **Explicit Non-Goals**: Reflog, hooks, Git notes, working directory state not preserved
 
 ### Compatibility Contract
 
@@ -127,7 +134,7 @@ The foundation of GitNext is a canonical object model that maintains Git compati
 
 **Dual-Hash Identity System (ADR-001)**:
 - **Primary Identity**: BLAKE3 hashes for all internal operations
-- **Compatibility Hashes**: SHA-1/SHA-256 computed at import/export boundaries
+- **Compatibility Hashes**: SHA-1/SHA-256 derived by re-serializing canonical objects to Git format
 - **Content-Based Identification**: Objects identified by cryptographic hashes of canonical content
 - **Hash Agility**: Future-proof design supporting algorithm evolution
 
@@ -162,10 +169,10 @@ pub struct Commit {
 }
 ```
 
-**Canonical Serialization**: All objects have deterministic canonical serialization that enables:
-- Consistent BLAKE3 hash computation across platforms
-- Reliable Git-compatible hash derivation
-- Storage-agnostic representation
+**Hash Derivation Process**: Git compatibility hashes are derived by:
+1. Serializing canonical objects to Git binary format
+2. Computing SHA-1/SHA-256 of the Git-formatted bytes
+3. NOT converting from BLAKE3 (cryptographically impossible)
 
 ### Storage Abstraction (gitnext-storage)
 
@@ -395,17 +402,33 @@ impl ProtocolHandler {
     pub async fn export_to_git(&self, repo: &Repository) -> Result<GitRepository>;
 }
 
-// Hash conversion between BLAKE3 and Git hashes (ADR-001)
-pub struct HashConverter {
-    blake3_to_sha1: HashMap<Blake3Hash, Sha1Hash>,
-    sha1_to_blake3: HashMap<Sha1Hash, Blake3Hash>,
+// Hash derivation between BLAKE3 and Git hashes (ADR-001)
+pub struct CompatHashDeriver {
+    // Cache for performance, not conversion
+    blake3_to_git_cache: HashMap<Blake3Hash, GitHash>,
 }
 
-impl HashConverter {
-    pub fn compute_git_hash(&self, object: &GitObject, hash_type: GitHashType) -> GitHash;
-    pub fn lookup_canonical_id(&self, git_hash: &GitHash) -> Option<ObjectId>;
+impl CompatHashDeriver {
+    pub fn derive_git_hash(&self, canonical_object: &GitObject, hash_type: GitHashType) -> GitHash {
+        // Re-serialize canonical object to Git format, then hash
+        let git_bytes = serialize_to_git_format(canonical_object);
+        match hash_type {
+            GitHashType::Sha1 => GitHash::Sha1(sha1::hash(&git_bytes)),
+            GitHashType::Sha256 => GitHash::Sha256(sha256::hash(&git_bytes)),
+        }
+    }
+    
+    pub fn lookup_by_git_hash(&self, git_hash: &GitHash) -> Option<ObjectId> {
+        // Reverse lookup in cache (not conversion)
+        self.git_to_blake3_cache.get(git_hash).map(|blake3| ObjectId::new(*blake3))
+    }
 }
 ```
+
+**V1 Protocol Scope**:
+- **Essential Operations**: Clone, fetch, push with HTTPS transport
+- **Packfile Support**: Basic packfile parsing and generation
+- **Deferred Features**: SSH auth, smart protocol negotiation, advanced capabilities
 
 **Compatibility Guarantees**:
 - **Import Fidelity**: All Git objects, commit graphs, and references preserved exactly
@@ -533,9 +556,11 @@ Based on the requirements analysis, the following correctness properties ensure 
 *For any* GitNext repository, the objects and references should be readable by standard Git tools, and vice versa.
 **Validates: Requirements 1.6**
 
-### Property 6: Storage Backend Behavioral Consistency
-*For any* sequence of repository operations, executing them on different storage backends should produce identical final repository states.
+### Property 6: Storage Backend Behavioral Consistency (Strong Consistency Backends)
+*For any* sequence of repository operations, executing them on strongly consistent storage backends (Memory, SQLite, PostgreSQL) should produce identical final repository states.
 **Validates: Requirements 2.7**
+
+**Note**: S3-compatible backends provide eventual consistency with documented trade-offs.
 
 ### Property 7: Git Protocol Push Compliance
 *For any* valid repository changes, pushing them to a Git server using GitNext should result in the same server state as pushing with standard Git.
@@ -549,21 +574,27 @@ Based on the requirements analysis, the following correctness properties ensure 
 *For any* set of Git objects, creating a packfile with GitNext should produce a packfile that can be read by standard Git tools, and vice versa.
 **Validates: Requirements 3.3**
 
-### Property 10: Git Object Format Compliance
-*For any* Git object (commit, tree, blob, tag), the binary representation created by GitNext should be identical to that created by standard Git.
+### Property 10: Git Object Export Fidelity
+*For any* canonical GitNext object, when exported to Git format, the resulting binary representation should produce identical SHA-1/SHA-256 hashes to standard Git for the same logical object content.
 **Validates: Requirements 3.5**
+
+**Note**: This property applies only to export/import boundaries, not internal canonical storage.
 
 ### Property 11: Operation Logging Completeness
 *For any* repository mutation operation, the operation should be recorded in the operation log with sufficient information to undo it.
 **Validates: Requirements 4.1**
 
-### Property 12: Undo Operation Correctness
-*For any* repository operation that has been performed, undoing it should restore the repository to its exact previous state.
+### Property 12: Undo Operation Correctness (Conflict-Free Operations)
+*For any* conflict-free repository operation that has been performed, undoing it should restore the repository to its exact previous state.
 **Validates: Requirements 4.2**
 
-### Property 13: Redo Operation Consistency
-*For any* operation that has been undone, redoing it should restore the repository to the same state as if the operation had never been undone.
+**Note**: V1 scope limited to conflict-free operations.
+
+### Property 13: Redo Operation Consistency (Conflict-Free Operations)
+*For any* conflict-free operation that has been undone, redoing it should restore the repository to the same state as if the operation had never been undone.
 **Validates: Requirements 4.3**
+
+**Note**: V1 scope limited to conflict-free operations.
 
 ### Property 14: Operation History Persistence
 *For any* sequence of operations performed before application restart, the operation history should be identical after restart.
