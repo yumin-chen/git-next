@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Local dependencies
+gitnext-core = { path = "../gitnext-core" }
+gitnext-storage = { path = "../gitnext-storage" }
+
+# Workspace dependencies
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Crate-specific dependencies
+chrono = "0.4.38"
+
+[dev-dependencies]
+gitnext-storage-memory = { path = "../gitnext-storage-memory" }
