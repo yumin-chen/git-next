@@ -4,3 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Local dependencies
+gitnext-core = { path = "../gitnext-core" }
+
+# Workspace dependencies
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
