@@ -102,7 +102,7 @@ impl fmt::Display for GitHash {
 }
 
 /// Git hash algorithm types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GitHashType {
     Sha1,
     Sha256,
@@ -112,7 +112,7 @@ pub enum GitHashType {
 /// This derives Git hashes by re-serializing canonical objects to Git format
 pub struct CompatHashDeriver {
     // Cache for performance optimization (not conversion)
-    cache: std::collections::HashMap<ObjectId, GitHash>,
+    cache: std::collections::HashMap<(ObjectId, GitHashType), GitHash>,
 }
 
 impl CompatHashDeriver {
@@ -126,9 +126,10 @@ impl CompatHashDeriver {
     /// This is NOT a conversion from BLAKE3 - it's a re-serialization and hash
     pub fn derive_git_hash(&mut self, object: &GitObject, hash_type: GitHashType) -> Result<GitHash> {
         let object_id = object.canonical_hash();
+        let cache_key = (object_id, hash_type);
         
         // Check cache first
-        if let Some(cached_hash) = self.cache.get(&object_id) {
+        if let Some(cached_hash) = self.cache.get(&cache_key) {
             return Ok(*cached_hash);
         }
         
@@ -137,7 +138,7 @@ impl CompatHashDeriver {
         let git_hash = GitHash::from_git_bytes(&git_bytes, hash_type);
         
         // Cache the result
-        self.cache.insert(object_id, git_hash);
+        self.cache.insert(cache_key, git_hash);
         
         Ok(git_hash)
     }

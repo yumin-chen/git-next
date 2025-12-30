@@ -10,7 +10,7 @@ gitnext-storage = { path = "../gitnext-storage" }
 
 # Workspace dependencies
 async-trait = { workspace = true }
-sqlx = { workspace = true }
+sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
 bincode = { workspace = true }
 
 # Crate-specific dependencies
