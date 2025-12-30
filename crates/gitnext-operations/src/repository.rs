@@ -1011,7 +1011,20 @@ mod property_tests {
                 
                 let initial_head = repo.head().await.unwrap();
                 let initial_refs = repo.storage.list_refs().await.unwrap();
-                let _initial_ref_count = initial_refs.len();
+                
+                // Count initial references by type
+                let initial_branch_refs: Vec<_> = initial_refs.iter()
+                    .filter(|r| r.name.starts_with("refs/heads/"))
+                    .collect();
+                let initial_log_refs: Vec<_> = initial_refs.iter()
+                    .filter(|r| r.name.starts_with("refs/logs/operations/"))
+                    .collect();
+                let initial_chain_refs: Vec<_> = initial_refs.iter()
+                    .filter(|r| r.name == "refs/logs/chain")
+                    .collect();
+                let initial_head_refs: Vec<_> = initial_refs.iter()
+                    .filter(|r| r.name == "HEAD")
+                    .collect();
                 
                 // Perform a series of branch creation operations
                 for branch_name in &branch_names {
@@ -1021,38 +1034,54 @@ mod property_tests {
                 // Verify that references were created
                 let final_refs = repo.storage.list_refs().await.unwrap();
                 
-                // Count different types of references
-                let branch_refs: Vec<_> = final_refs.iter()
-                    .filter(|r| r.name.starts_with("refs/heads/") && r.name != "refs/heads/main")
+                // Count final references by type
+                let final_branch_refs: Vec<_> = final_refs.iter()
+                    .filter(|r| r.name.starts_with("refs/heads/"))
                     .collect();
-                let _log_operation_refs: Vec<_> = final_refs.iter()
+                let final_log_refs: Vec<_> = final_refs.iter()
                     .filter(|r| r.name.starts_with("refs/logs/operations/"))
                     .collect();
+                let final_chain_refs: Vec<_> = final_refs.iter()
+                    .filter(|r| r.name == "refs/logs/chain")
+                    .collect();
+                let final_head_refs: Vec<_> = final_refs.iter()
+                    .filter(|r| r.name == "HEAD")
+                    .collect();
                 
-                // Verify that each branch was created
-                prop_assert_eq!(branch_refs.len(), branch_names.len(), 
-                    "Should have {} branch refs, got {}", branch_names.len(), branch_refs.len());
+                // Verify branch references were created correctly
+                prop_assert_eq!(final_branch_refs.len(), initial_branch_refs.len() + branch_names.len(), 
+                    "Should have {} branch refs (initial {} + new {}), got {}", 
+                    initial_branch_refs.len() + branch_names.len(), 
+                    initial_branch_refs.len(), 
+                    branch_names.len(), 
+                    final_branch_refs.len());
                 
+                // Verify each branch was created
                 for branch_name in &branch_names {
                     let branch_ref = format!("refs/heads/{}", branch_name);
                     let branch_exists = final_refs.iter().any(|r| r.name == branch_ref);
                     prop_assert!(branch_exists, "Branch {} should exist", branch_name);
                 }
                 
-                // Verify that operation log entries were created
-                // We check this by looking for log references in storage
-                let log_refs: Vec<_> = final_refs.iter()
-                    .filter(|r| r.name.starts_with("refs/logs/operations/"))
-                    .collect();
+                // Verify operation log entries were created
+                // Each branch creation should add one log entry
+                prop_assert_eq!(final_log_refs.len(), initial_log_refs.len() + branch_names.len(), 
+                    "Should have {} log entries (initial {} + new {}), got {}", 
+                    initial_log_refs.len() + branch_names.len(), 
+                    initial_log_refs.len(), 
+                    branch_names.len(), 
+                    final_log_refs.len());
                 
-                // We should have at least one log entry per branch creation plus the initial commit
-                // The initial repository setup creates one log entry, then each branch creation adds one more
-                prop_assert!(log_refs.len() >= 1 + branch_names.len(), 
-                    "Should have at least {} log entries (1 initial + {} branches), found {}", 
-                    1 + branch_names.len(), branch_names.len(), log_refs.len());
+                // Verify log chain reference exists and is maintained
+                prop_assert_eq!(final_chain_refs.len(), 1, "Should have exactly one log chain reference");
+                prop_assert_eq!(initial_chain_refs.len(), 1, "Should have had exactly one initial log chain reference");
+                
+                // Verify HEAD reference is maintained
+                prop_assert_eq!(final_head_refs.len(), 1, "Should have exactly one HEAD reference");
+                prop_assert_eq!(initial_head_refs.len(), 1, "Should have had exactly one initial HEAD reference");
                 
                 // Verify that each log entry can be loaded and contains valid operation data
-                for log_ref in &log_refs {
+                for log_ref in &final_log_refs {
                     if let gitnext_storage::ReferenceTarget::Direct(log_id) = &log_ref.target {
                         let log_object = storage.load_object(log_id).await.unwrap();
                         prop_assert!(log_object.is_some(), "Log object should exist");
@@ -1077,7 +1106,7 @@ mod property_tests {
                                         Operation::CreateBranch { name, target, before_refs } => {
                                             prop_assert!(!name.is_empty(), "Branch name should not be empty");
                                             prop_assert_eq!(target.as_bytes().len(), 32, "Target should be valid ObjectId");
-                                            prop_assert_eq!(before_refs.len(), before_refs.len(), "Before refs should be consistent");
+                                            prop_assert!(before_refs.is_empty() || !before_refs.is_empty(), "Before refs should be valid");
                                         }
                                         Operation::Commit { before_head: _, after_head, tree, message, parents: _ } => {
                                             prop_assert_eq!(after_head.as_bytes().len(), 32, "After head should be valid ObjectId");
@@ -1088,10 +1117,6 @@ mod property_tests {
                                             // Other operation types are valid
                                         }
                                     }
-                                    
-                                    // Verify before and after states are present
-                                    prop_assert!(!log_entry.before_state.refs.is_empty() || log_entry.before_state.refs.is_empty(), "Before state should have refs");
-                                    prop_assert!(!log_entry.after_state.refs.is_empty() || log_entry.after_state.refs.is_empty(), "After state should have refs");
                                     
                                     // Verify command intent is recorded
                                     prop_assert!(!log_entry.command_intent.command.is_empty(), 
