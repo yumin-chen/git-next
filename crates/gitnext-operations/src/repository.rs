@@ -456,6 +456,36 @@ impl Repository {
         self.operation_log.lock().unwrap().redo(self).await
     }
     
+    /// Check if there are operations that can be undone
+    pub fn can_undo(&self) -> bool {
+        self.operation_log.lock().unwrap().can_undo()
+    }
+    
+    /// Check if there are operations that can be redone
+    pub fn can_redo(&self) -> bool {
+        self.operation_log.lock().unwrap().can_redo()
+    }
+    
+    /// Get a preview of the operation that would be undone
+    pub async fn peek_undo(&self) -> Result<Option<Operation>, StorageError> {
+        self.operation_log.lock().unwrap().peek_undo().await
+    }
+    
+    /// Get a preview of the operation that would be redone
+    pub async fn peek_redo(&self) -> Result<Option<Operation>, StorageError> {
+        self.operation_log.lock().unwrap().peek_redo().await
+    }
+    
+    /// Get the current position in the operation log
+    pub fn operation_log_position(&self) -> usize {
+        self.operation_log.lock().unwrap().current_position()
+    }
+    
+    /// Get the total number of operations in the log
+    pub fn operation_log_size(&self) -> usize {
+        self.operation_log.lock().unwrap().total_operations()
+    }
+    
     /// Create a new commit with the given tree and message (Requirements 1.3, 4.1)
     pub async fn commit(
         &self,
@@ -585,6 +615,48 @@ impl OperationLog {
         }
     }
     
+    /// Get the current position in the operation log
+    pub fn current_position(&self) -> usize {
+        self.current_position
+    }
+    
+    /// Get the total number of operations in the log
+    pub fn total_operations(&self) -> usize {
+        self.log_chain.len()
+    }
+    
+    /// Check if there are operations that can be undone
+    pub fn can_undo(&self) -> bool {
+        self.current_position > 0
+    }
+    
+    /// Check if there are operations that can be redone
+    pub fn can_redo(&self) -> bool {
+        self.current_position < self.log_chain.len()
+    }
+    
+    /// Get a preview of the operation that would be undone
+    pub async fn peek_undo(&self) -> Result<Option<Operation>, StorageError> {
+        if !self.can_undo() {
+            return Ok(None);
+        }
+        
+        let entry_id = self.log_chain[self.current_position - 1];
+        let entry = self.load_log_entry(entry_id).await?;
+        Ok(entry.map(|e| e.operation))
+    }
+    
+    /// Get a preview of the operation that would be redone
+    pub async fn peek_redo(&self) -> Result<Option<Operation>, StorageError> {
+        if !self.can_redo() {
+            return Ok(None);
+        }
+        
+        let entry_id = self.log_chain[self.current_position];
+        let entry = self.load_log_entry(entry_id).await?;
+        Ok(entry.map(|e| e.operation))
+    }
+    
     /// Record an operation in the log (Requirements 4.1, 4.4)
     pub async fn record(&mut self, entry: LogEntry) -> Result<(), StorageError> {
         // Serialize the log entry
@@ -651,18 +723,50 @@ impl OperationLog {
                 let branch_ref = format!("refs/heads/{}", name);
                 repo.storage.update_ref(&branch_ref, deleted_target).await?;
             }
-            Operation::SwitchBranch { before_head, .. } => {
+            Operation::SwitchBranch { from_branch, before_head, .. } => {
                 // Switch back to the previous HEAD
                 repo.storage.update_ref("HEAD", before_head).await?;
+                
+                // Update current branch tracking if switching from a named branch
+                if from_branch != "HEAD" {
+                    let current_branch_ref = "refs/gitnext/current-branch";
+                    let branch_name_bytes = from_branch.as_bytes().to_vec();
+                    let branch_name_blob = gitnext_core::Blob::new(bytes::Bytes::from(branch_name_bytes));
+                    let branch_name_object = gitnext_core::GitObject::Blob(branch_name_blob);
+                    let branch_name_id = branch_name_object.canonical_hash();
+                    repo.storage.store_object(&branch_name_id, &branch_name_object).await?;
+                    repo.storage.update_ref(current_branch_ref, &branch_name_id).await?;
+                }
             }
             Operation::Commit { before_head, .. } => {
                 // Reset HEAD to the previous commit
                 if let Some(prev_head) = before_head {
                     repo.storage.update_ref("HEAD", prev_head).await?;
+                    
+                    // Also update the current branch reference if we're on a branch
+                    let current_branch = repo.get_current_branch().await?;
+                    if let Some(branch_name) = current_branch {
+                        let branch_ref = format!("refs/heads/{}", branch_name);
+                        repo.storage.update_ref(&branch_ref, prev_head).await?;
+                    }
+                } else {
+                    // This was the initial commit, we can't undo it completely
+                    // but we can reset HEAD to None (though this is unusual)
+                    return Err(StorageError::Backend(
+                        "Cannot undo initial commit - no previous state".to_string()
+                    ));
                 }
             }
-            _ => {
-                // Other operations not yet implemented
+            Operation::Merge { before_head, .. } => {
+                // Reset HEAD to the state before the merge
+                repo.storage.update_ref("HEAD", before_head).await?;
+                
+                // Update current branch reference if we're on a branch
+                let current_branch = repo.get_current_branch().await?;
+                if let Some(branch_name) = current_branch {
+                    let branch_ref = format!("refs/heads/{}", branch_name);
+                    repo.storage.update_ref(&branch_ref, before_head).await?;
+                }
             }
         }
         
@@ -694,14 +798,37 @@ impl OperationLog {
                 let branch_ref = format!("refs/heads/{}", name);
                 repo.storage.delete_ref(&branch_ref).await?;
             }
-            Operation::SwitchBranch { after_head, .. } => {
+            Operation::SwitchBranch { to_branch, after_head, .. } => {
                 repo.storage.update_ref("HEAD", after_head).await?;
+                
+                // Update current branch tracking
+                let current_branch_ref = "refs/gitnext/current-branch";
+                let branch_name_bytes = to_branch.as_bytes().to_vec();
+                let branch_name_blob = gitnext_core::Blob::new(bytes::Bytes::from(branch_name_bytes));
+                let branch_name_object = gitnext_core::GitObject::Blob(branch_name_blob);
+                let branch_name_id = branch_name_object.canonical_hash();
+                repo.storage.store_object(&branch_name_id, &branch_name_object).await?;
+                repo.storage.update_ref(current_branch_ref, &branch_name_id).await?;
             }
             Operation::Commit { after_head, .. } => {
                 repo.storage.update_ref("HEAD", after_head).await?;
+                
+                // Update current branch reference if we're on a branch
+                let current_branch = repo.get_current_branch().await?;
+                if let Some(branch_name) = current_branch {
+                    let branch_ref = format!("refs/heads/{}", branch_name);
+                    repo.storage.update_ref(&branch_ref, after_head).await?;
+                }
             }
-            _ => {
-                // Other operations not yet implemented
+            Operation::Merge { after_head, .. } => {
+                repo.storage.update_ref("HEAD", after_head).await?;
+                
+                // Update current branch reference if we're on a branch
+                let current_branch = repo.get_current_branch().await?;
+                if let Some(branch_name) = current_branch {
+                    let branch_ref = format!("refs/heads/{}", branch_name);
+                    repo.storage.update_ref(&branch_ref, after_head).await?;
+                }
             }
         }
         
@@ -903,6 +1030,7 @@ mod tests {
         let repo = Repository::init(storage).await.unwrap();
 
         let initial_head = repo.head().await.unwrap();
+        let initial_position = repo.operation_log_position();
         
         // Create a branch
         repo.create_branch("test-branch", &initial_head).await.unwrap();
@@ -910,15 +1038,218 @@ mod tests {
         // Verify branch exists
         let refs = repo.storage.list_refs().await.unwrap();
         assert!(refs.iter().any(|r| r.name == "refs/heads/test-branch"));
+        assert!(repo.can_undo());
+        assert!(!repo.can_redo());
         
-        // Test undo (simplified - just verify it doesn't crash)
-        let _undo_result = repo.undo().await.unwrap();
-        // In our current implementation, undo returns None for CreateBranch operations
-        // This is expected as we haven't implemented full branch deletion yet
+        // Test undo - should remove the branch
+        let undone_op = repo.undo().await.unwrap();
+        assert!(undone_op.is_some());
         
-        // Test redo (simplified - just verify it doesn't crash)
-        let _redo_result = repo.redo().await.unwrap();
-        // Similarly, redo should work without crashing
+        // Verify branch was removed
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(!refs.iter().any(|r| r.name == "refs/heads/test-branch"));
+        
+        // Should be back to initial position (after init commit)
+        assert_eq!(repo.operation_log_position(), initial_position);
+        // Can still undo the initial commit if needed
+        assert!(repo.can_undo());
+        assert!(repo.can_redo());
+        
+        // Test redo - should recreate the branch
+        let redone_op = repo.redo().await.unwrap();
+        assert!(redone_op.is_some());
+        
+        // Verify branch was recreated
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(refs.iter().any(|r| r.name == "refs/heads/test-branch"));
+        assert!(repo.can_undo());
+        assert!(!repo.can_redo());
+    }
+
+    #[tokio::test]
+    async fn test_undo_redo_commit() {
+        let storage = Arc::new(MemoryStorage::new());
+        let repo = Repository::init(storage.clone()).await.unwrap();
+
+        let initial_head = repo.head().await.unwrap();
+        
+        // Create an empty tree for the commit
+        let empty_tree = Tree::new(vec![]);
+        let tree_object = GitObject::Tree(empty_tree);
+        let tree_id = tree_object.canonical_hash();
+        
+        // Store the tree
+        repo.storage.store_object(&tree_id, &tree_object).await.unwrap();
+        
+        // Create author and committer signatures
+        let author = Signature {
+            name: "Test Author".to_string(),
+            email: "test@example.com".to_string(),
+            timestamp: Utc::now().timestamp(),
+            timezone_offset: 0,
+        };
+        
+        let committer = author.clone();
+        
+        // Create a commit
+        let commit_id = repo.commit(
+            &tree_id,
+            vec![initial_head],
+            author,
+            committer,
+            "Test commit for undo/redo".to_string(),
+        ).await.unwrap();
+        
+        // Verify HEAD was updated
+        let new_head = repo.head().await.unwrap();
+        assert_eq!(new_head, commit_id);
+        assert!(repo.can_undo());
+        
+        // Test undo - should reset HEAD to previous commit
+        let undone_op = repo.undo().await.unwrap();
+        assert!(undone_op.is_some());
+        
+        // Verify HEAD was reset
+        let head_after_undo = repo.head().await.unwrap();
+        assert_eq!(head_after_undo, initial_head);
+        assert!(repo.can_redo());
+        
+        // Test redo - should restore the commit
+        let redone_op = repo.redo().await.unwrap();
+        assert!(redone_op.is_some());
+        
+        // Verify HEAD was restored
+        let head_after_redo = repo.head().await.unwrap();
+        assert_eq!(head_after_redo, commit_id);
+    }
+
+    #[tokio::test]
+    async fn test_undo_redo_branch_switch() {
+        let storage = Arc::new(MemoryStorage::new());
+        let repo = Repository::init(storage).await.unwrap();
+
+        let initial_head = repo.head().await.unwrap();
+        
+        // Create a feature branch
+        repo.create_branch("feature", &initial_head).await.unwrap();
+        
+        // Switch to the feature branch
+        repo.switch_branch("feature").await.unwrap();
+        
+        // Verify we're on the feature branch
+        let current_branch = repo.get_current_branch().await.unwrap();
+        assert_eq!(current_branch, Some("feature".to_string()));
+        
+        // Test undo - should switch back to previous branch/HEAD
+        let undone_op = repo.undo().await.unwrap();
+        assert!(undone_op.is_some());
+        
+        // Verify HEAD was reset (though current branch tracking might be different)
+        let head_after_undo = repo.head().await.unwrap();
+        assert_eq!(head_after_undo, initial_head);
+        
+        // Test redo - should switch back to feature branch
+        let redone_op = repo.redo().await.unwrap();
+        assert!(redone_op.is_some());
+        
+        // Verify we're back on the feature branch
+        let head_after_redo = repo.head().await.unwrap();
+        assert_eq!(head_after_redo, initial_head); // Same commit, different branch
+        let current_branch_after_redo = repo.get_current_branch().await.unwrap();
+        assert_eq!(current_branch_after_redo, Some("feature".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_undo_redo_operations() {
+        let storage = Arc::new(MemoryStorage::new());
+        let repo = Repository::init(storage).await.unwrap();
+
+        let initial_head = repo.head().await.unwrap();
+        
+        // Perform multiple operations
+        repo.create_branch("branch1", &initial_head).await.unwrap();
+        repo.create_branch("branch2", &initial_head).await.unwrap();
+        repo.create_branch("branch3", &initial_head).await.unwrap();
+        
+        // Verify all branches exist
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch1"));
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch2"));
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch3"));
+        
+        // Undo all operations
+        repo.undo().await.unwrap(); // Undo branch3 creation
+        repo.undo().await.unwrap(); // Undo branch2 creation
+        repo.undo().await.unwrap(); // Undo branch1 creation
+        
+        // Verify all branches were removed
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(!refs.iter().any(|r| r.name == "refs/heads/branch1"));
+        assert!(!refs.iter().any(|r| r.name == "refs/heads/branch2"));
+        assert!(!refs.iter().any(|r| r.name == "refs/heads/branch3"));
+        
+        // Redo some operations
+        repo.redo().await.unwrap(); // Redo branch1 creation
+        repo.redo().await.unwrap(); // Redo branch2 creation
+        
+        // Verify partial restoration
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch1"));
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch2"));
+        assert!(!refs.iter().any(|r| r.name == "refs/heads/branch3"));
+        
+        // Should still be able to redo the last operation
+        assert!(repo.can_redo());
+        repo.redo().await.unwrap(); // Redo branch3 creation
+        
+        // Verify full restoration
+        let refs = repo.storage.list_refs().await.unwrap();
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch1"));
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch2"));
+        assert!(refs.iter().any(|r| r.name == "refs/heads/branch3"));
+        
+        // Should not be able to redo anymore
+        assert!(!repo.can_redo());
+    }
+
+    #[tokio::test]
+    async fn test_undo_redo_state_consistency() {
+        let storage = Arc::new(MemoryStorage::new());
+        let repo = Repository::init(storage).await.unwrap();
+
+        let initial_head = repo.head().await.unwrap();
+        let initial_position = repo.operation_log_position();
+        let initial_size = repo.operation_log_size();
+        
+        // Create a branch
+        repo.create_branch("test", &initial_head).await.unwrap();
+        
+        let after_create_position = repo.operation_log_position();
+        let after_create_size = repo.operation_log_size();
+        
+        // Verify log state changed
+        assert_eq!(after_create_position, initial_position + 1);
+        assert_eq!(after_create_size, initial_size + 1);
+        
+        // Undo the operation
+        repo.undo().await.unwrap();
+        
+        let after_undo_position = repo.operation_log_position();
+        let after_undo_size = repo.operation_log_size();
+        
+        // Verify position moved back but size remained the same
+        assert_eq!(after_undo_position, initial_position);
+        assert_eq!(after_undo_size, after_create_size); // Size doesn't change on undo
+        
+        // Redo the operation
+        repo.redo().await.unwrap();
+        
+        let after_redo_position = repo.operation_log_position();
+        let after_redo_size = repo.operation_log_size();
+        
+        // Verify we're back to the state after creation
+        assert_eq!(after_redo_position, after_create_position);
+        assert_eq!(after_redo_size, after_create_size);
     }
 
     #[tokio::test]
