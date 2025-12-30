@@ -1758,5 +1758,232 @@ mod property_tests {
                 Ok(())
             })?;
         }
+        
+        /// Property 12: Undo Operation Correctness (Conflict-Free Operations)
+        /// For any conflict-free repository operation that has been performed, undoing it 
+        /// should restore the repository to its exact previous state.
+        /// **Validates: Requirements 4.2**
+        /// **Note**: V1 scope limited to conflict-free operations
+        #[test]
+        fn prop_undo_operation_correctness(
+            branch_operations in prop::collection::vec(arb_branch_name(), 1..5),
+            commit_messages in prop::collection::vec(arb_commit_message(), 0..3),
+        ) {
+            tokio_test::block_on(async {
+                let storage = Arc::new(MemoryStorage::new());
+                let repo = Repository::init(storage.clone()).await.unwrap();
+                
+                let initial_head = repo.head().await.unwrap();
+                let initial_refs = repo.get_all_refs().await.unwrap();
+                let initial_position = repo.operation_log_position();
+                
+                // Create author signature for commits
+                let author = gitnext_core::Signature {
+                    name: "Test Author".to_string(),
+                    email: "test@example.com".to_string(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    timezone_offset: 0,
+                };
+                
+                let mut operations_performed = Vec::new();
+                let mut state_snapshots = Vec::new();
+                
+                // Capture initial state
+                state_snapshots.push((
+                    repo.head().await.unwrap(),
+                    repo.get_all_refs().await.unwrap(),
+                    repo.operation_log_position(),
+                ));
+                
+                // Perform a series of conflict-free operations
+                let mut current_head = initial_head;
+                
+                // First, create some commits to have different targets for branches
+                for (i, message) in commit_messages.iter().enumerate() {
+                    let tree = gitnext_core::Tree::new(vec![]);
+                    let tree_object = gitnext_core::GitObject::Tree(tree);
+                    let tree_id = tree_object.canonical_hash();
+                    storage.store_object(&tree_id, &tree_object).await.unwrap();
+                    
+                    let commit_id = repo.commit(
+                        &tree_id,
+                        vec![current_head],
+                        author.clone(),
+                        author.clone(),
+                        format!("Test commit {}: {}", i, message),
+                    ).await.unwrap();
+                    
+                    operations_performed.push(format!("commit: {}", message));
+                    current_head = commit_id;
+                    
+                    // Capture state after commit
+                    state_snapshots.push((
+                        repo.head().await.unwrap(),
+                        repo.get_all_refs().await.unwrap(),
+                        repo.operation_log_position(),
+                    ));
+                }
+                
+                // Then perform branch operations
+                for branch_name in &branch_operations {
+                    // Create branch
+                    repo.create_branch(branch_name, &current_head).await.unwrap();
+                    operations_performed.push(format!("create_branch: {}", branch_name));
+                    
+                    // Capture state after branch creation
+                    state_snapshots.push((
+                        repo.head().await.unwrap(),
+                        repo.get_all_refs().await.unwrap(),
+                        repo.operation_log_position(),
+                    ));
+                    
+                    // Switch to branch (if not the first branch to avoid conflicts)
+                    if branch_operations.len() > 1 {
+                        repo.switch_branch(branch_name).await.unwrap();
+                        operations_performed.push(format!("switch_branch: {}", branch_name));
+                        
+                        // Capture state after branch switch
+                        state_snapshots.push((
+                            repo.head().await.unwrap(),
+                            repo.get_all_refs().await.unwrap(),
+                            repo.operation_log_position(),
+                        ));
+                    }
+                }
+                
+                // Now test undo correctness by undoing operations one by one
+                let total_operations = operations_performed.len();
+                
+                for i in (0..total_operations).rev() {
+                    // Verify we can undo
+                    prop_assert!(repo.can_undo(), 
+                        "Should be able to undo operation {} ({})", i, operations_performed[i]);
+                    
+                    // Get the expected state before undo (the state before this operation)
+                    let expected_state = &state_snapshots[i];
+                    
+                    // Perform undo
+                    let undone_operation = repo.undo().await.unwrap();
+                    prop_assert!(undone_operation.is_some(), 
+                        "Undo should return the undone operation for operation {}", i);
+                    
+                    // Verify the repository state was restored exactly
+                    let actual_head = repo.head().await.unwrap();
+                    let actual_refs = repo.get_all_refs().await.unwrap();
+                    let actual_position = repo.operation_log_position();
+                    
+                    prop_assert_eq!(actual_head, expected_state.0, 
+                        "HEAD should be restored to exact previous state after undoing operation {} ({})", 
+                        i, operations_performed[i]);
+                    
+                    prop_assert_eq!(actual_position, expected_state.2, 
+                        "Operation log position should be restored after undoing operation {} ({})", 
+                        i, operations_performed[i]);
+                    
+                    // Verify all references are restored exactly
+                    for (ref_name, expected_target) in &expected_state.1 {
+                        let actual_target = actual_refs.get(ref_name);
+                        prop_assert_eq!(actual_target, Some(expected_target), 
+                            "Reference {} should be restored to exact previous state after undoing operation {} ({})", 
+                            ref_name, i, operations_performed[i]);
+                    }
+                    
+                    // Verify no extra references were created
+                    for (ref_name, _) in &actual_refs {
+                        prop_assert!(expected_state.1.contains_key(ref_name), 
+                            "No unexpected reference {} should exist after undoing operation {} ({})", 
+                            ref_name, i, operations_performed[i]);
+                    }
+                    
+                    // Verify the exact number of references matches
+                    prop_assert_eq!(actual_refs.len(), expected_state.1.len(), 
+                        "Number of references should match exactly after undoing operation {} ({})", 
+                        i, operations_performed[i]);
+                    
+                    // Verify that the undone operation matches what we expect
+                    if let Some(undone_op) = undone_operation {
+                        match (&undone_op, operations_performed[i].as_str()) {
+                            (Operation::CreateBranch { name, .. }, op_str) if op_str.starts_with("create_branch:") => {
+                                let expected_name = op_str.strip_prefix("create_branch: ").unwrap();
+                                prop_assert_eq!(name, expected_name, 
+                                    "Undone branch creation should match expected branch name");
+                            }
+                            (Operation::SwitchBranch { to_branch, .. }, op_str) if op_str.starts_with("switch_branch:") => {
+                                let expected_name = op_str.strip_prefix("switch_branch: ").unwrap();
+                                prop_assert_eq!(to_branch, expected_name, 
+                                    "Undone branch switch should match expected branch name");
+                            }
+                            (Operation::Commit { message, .. }, op_str) if op_str.starts_with("commit:") => {
+                                let expected_message = op_str.strip_prefix("commit: ").unwrap();
+                                prop_assert!(message.contains(expected_message), 
+                                    "Undone commit should contain expected message fragment");
+                            }
+                            _ => {
+                                // Other operation types are acceptable
+                            }
+                        }
+                    }
+                }
+                
+                // After undoing all operations, we should be back to initial state
+                let final_head = repo.head().await.unwrap();
+                let final_refs = repo.get_all_refs().await.unwrap();
+                let final_position = repo.operation_log_position();
+                
+                prop_assert_eq!(final_head, initial_head, 
+                    "After undoing all operations, HEAD should be back to initial state");
+                prop_assert_eq!(final_position, initial_position, 
+                    "After undoing all operations, log position should be back to initial state");
+                
+                // Verify initial references are restored (allowing for log references)
+                for (ref_name, expected_target) in &initial_refs {
+                    if !ref_name.starts_with("refs/logs/") {
+                        let actual_target = final_refs.get(ref_name);
+                        prop_assert_eq!(actual_target, Some(expected_target), 
+                            "Initial reference {} should be restored exactly", ref_name);
+                    }
+                }
+                
+                // Verify we cannot undo further than the initial state
+                // (We should still be able to undo the init operation, but let's not test that edge case)
+                
+                // Test that we can redo all operations back
+                for i in 0..total_operations {
+                    prop_assert!(repo.can_redo(), 
+                        "Should be able to redo operation {} after undoing all", i);
+                    
+                    let redone_operation = repo.redo().await.unwrap();
+                    prop_assert!(redone_operation.is_some(), 
+                        "Redo should return the redone operation for operation {}", i);
+                    
+                    // Verify state is restored to what it was after the original operation
+                    let expected_state = &state_snapshots[i + 1]; // +1 because snapshots include initial state
+                    
+                    let actual_head = repo.head().await.unwrap();
+                    let actual_refs = repo.get_all_refs().await.unwrap();
+                    let actual_position = repo.operation_log_position();
+                    
+                    prop_assert_eq!(actual_head, expected_state.0, 
+                        "HEAD should be restored after redoing operation {}", i);
+                    prop_assert_eq!(actual_position, expected_state.2, 
+                        "Operation log position should be restored after redoing operation {}", i);
+                    
+                    // Verify references are restored (excluding log references which may have changed)
+                    for (ref_name, expected_target) in &expected_state.1 {
+                        if !ref_name.starts_with("refs/logs/") {
+                            let actual_target = actual_refs.get(ref_name);
+                            prop_assert_eq!(actual_target, Some(expected_target), 
+                                "Reference {} should be restored after redoing operation {}", ref_name, i);
+                        }
+                    }
+                }
+                
+                // After redoing all operations, we should be back to the final state
+                prop_assert!(!repo.can_redo(), "Should not be able to redo after redoing all operations");
+                prop_assert!(repo.can_undo(), "Should be able to undo after redoing all operations");
+                
+                Ok(())
+            })?;
+        }
     }
 }
