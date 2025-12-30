@@ -1,45 +1,26 @@
 # GitNext
 
-> A next-generation agent-aware Git implementation in Rust with WASM compilation, providing multi-agent orchestration while maintaining Git compatibility.
+> A modern Git reimagination in Rust with WASM compilation, keeping Git compatibility while fixing fundamental issues.
 
-GitNext is a revolutionary Git implementation built in **pure Rust**, designed for **agent-aware operations, multi-agent orchestration, semantic conflict detection, and enterprise-grade security** while maintaining full Git compatibility.
+GitNext is a next-generation Git implementation built in **pure Rust**, designed for **safety, performance, flexibility**, and **browser/embedded compatibility**.
 
 ---
 
 ## Design Principles
 
-**GitNext** transforms Git into a multi-agent orchestration platform while remaining fully compatible with existing Git workflows, enabling sophisticated agent-driven development with enterprise-grade security and performance.
+**GitNext** fixes fundamental Git limitations while remaining fully compatible with GitHub/GitLab workflows, enabling browser-based, embedded, and cloud-native Git operations.
 
-### Agent-Aware Design Principles
-1. **Agent-First Architecture** – Multi-agent causality and coordination built-in
-2. **Interval Tree Clocks** – O(log agents) causality tracking vs O(agents²) vector clocks
-3. **Semantic Understanding** – Resource dependency graphs beyond line-level diffs
-4. **Determinism Contracts** – Pre-execution validation with environment snapshots
-5. **Capability-Based Security** – Fine-grained authorization with audit trails
-6. **Workflow Orchestration** – Native support for complex multi-agent workflows
-7. **Semantic Query Indices** – Multi-dimensional indexing for agent timeline analysis
-
-### Core Engineering Principles
-8. **Data model first, storage second** – Abstract DAG & operations
-9. **Pure Rust + WASM** – Run everywhere (CLI, browser, edge, embedded)
-10. **Git protocol compatibility** – Interop with GitHub/GitLab
-11. **Storage agnostic** – Memory, SQLite, PostgreSQL, IndexedDB, S3
-12. **Parallel & async by default** – Modern concurrency primitives
-13. **Type-safe & memory-safe** – Zero UB, no crashes
-14. **Queryable from day 1** – Built-in indexes, no full scans
-15. **Never lose work** – Operation log, undo/redo anything
+1. **Data model first, storage second** – Abstract DAG & operations
+2. **Pure Rust + WASM** – Run everywhere (CLI, browser, edge, embedded)
+3. **Git protocol compatibility** – Interop with GitHub/GitLab
+4. **Storage agnostic** – Memory, SQLite, PostgreSQL, IndexedDB, S3
+5. **Parallel & async by default** – Modern concurrency primitives
+6. **Type-safe & memory-safe** – Zero UB, no crashes
+7. **Queryable from day 1** – Built-in indexes, no full scans
+8. **Never lose work** – Operation log, undo/redo anything
 
 ### Features
 
-#### Agent-Aware Capabilities
-- **Multi-Agent Causality**: Interval Tree Clocks for scalable agent coordination
-- **Semantic Conflict Detection**: Resource dependency graphs for intelligent conflict resolution
-- **Determinism Contracts**: Pre-execution validation ensuring reproducible agent operations
-- **Agent Authorization**: Capability-Based Access Control with comprehensive audit trails
-- **Workflow Orchestration**: Native support for complex multi-agent workflows
-- **Semantic Query Indices**: Multi-dimensional indexing for agent timeline and performance analysis
-
-#### Core Engineering Features
 - **Safe**: Rust, memory-safe, zero UB
 - **Fast**: Parallel, async, indexed operations
 - **Flexible**: Pluggable storage backends, WASM support
@@ -182,34 +163,28 @@ await repo.commit("Browser commit");
 
 ## Roadmap
 
-### Phase 1: Agent-Aware Foundation (Critical for MVP)
-* **Interval Tree Clocks**: O(log agents) causality tracking replacing vector clocks
-* **Determinism Contracts**: Pre-execution validation with environment snapshots
-* **Semantic Conflict Detection**: Resource dependency graphs for intelligent merging
-* **Agent Authorization**: Capability-Based Access Control with storage layer enforcement
+**Phase 1: MVP**
 
-### Phase 2: Production-Grade Security & Performance
-* **Agent Capabilities**: Cryptographic tokens with fine-grained permissions
-* **Audit Logging**: Immutable authorization decisions with detailed reasoning
-* **Semantic Query Indices**: Multi-dimensional indexing for agent timeline analysis
-* **Enhanced Storage**: Authorization-enforcing backends (SQLite, PostgreSQL)
+* Core data model, storage trait, SQLite & memory backend, repository ops, CLI basics
 
-### Phase 3: Workflow Orchestration
-* **First-Class Workflows**: Workflow definitions as repository primitives
-* **Workflow Execution Engine**: Storage-layer execution with dependency resolution
-* **Workflow Validation**: Pre-execution DAG validation and deadlock prevention
-* **Workflow State Management**: Checkpointing, rollback, and monitoring
+**Phase 2: Performance**
 
-### Phase 4: Advanced Multi-Agent Features
-* **Git Protocol with Agent Extensions**: Agent metadata preservation in Git compatibility
-* **Browser Agent Support**: Full agent capabilities in WASM/IndexedDB
-* **Performance Optimization**: Parallel agent operations with efficient causality
-* **Cross-Platform Consistency**: Identical agent behavior across all platforms
+* Indexed commit graph, generation numbers, parallel ops, benchmarks
 
-### Phase 5: Enterprise Integration
-* **Advanced Storage**: PostgreSQL, S3 with authorization enforcement
-* **Multi-Agent Server**: GitNext server with agent coordination
-* **Comprehensive Testing**: Property-based testing with 100+ iterations
-* **Production Tooling**: Monitoring, metrics, and operational dashboards
+**Phase 3: WASM**
+
+* IndexedDB backend, browser demo, service worker sync
+
+**Phase 4: Git Compatibility**
+
+* Git object format, protocol handlers, clone/push/pull, test GitHub/GitLab
+
+**Phase 5: Advanced Features**
+
+* Artifact tracking, semantic merge, query DSL, operation log UI
+
+**Phase 6: Production**
+
+* PostgreSQL & S3 backend, server implementation, multi-user support, security audit
 
 ---
