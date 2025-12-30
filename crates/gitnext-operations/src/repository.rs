@@ -537,7 +537,7 @@ impl Repository {
     }
     
     /// Get the current branch name (if HEAD points to a branch)
-    async fn get_current_branch(&self) -> Result<Option<String>, StorageError> {
+    pub async fn get_current_branch(&self) -> Result<Option<String>, StorageError> {
         // First, try to get the current branch from our tracking reference
         let current_branch_ref = "refs/gitnext/current-branch";
         let refs = self.storage.list_refs().await?;
@@ -982,7 +982,6 @@ mod property_tests {
     use super::*;
     use gitnext_storage::memory::MemoryStorage;
     use proptest::prelude::*;
-    use gitnext_core::tests::arb_git_object;
 
     // Generator for repository operations
     prop_compose! {
@@ -1018,9 +1017,6 @@ mod property_tests {
                 for branch_name in &branch_names {
                     repo.create_branch(branch_name, &initial_head).await.unwrap();
                 }
-                
-                // Verify that references were created
-                let final_refs = repo.storage.list_refs().await.unwrap();
                 
                 // Verify that references were created
                 let final_refs = repo.storage.list_refs().await.unwrap();
@@ -1260,6 +1256,148 @@ mod property_tests {
                 // Should have log entries for init + each commit
                 prop_assert!(log_refs.len() >= commit_messages.len(), 
                     "Should have at least {} log entries for commits", commit_messages.len());
+                
+                Ok(())
+            })?;
+        }
+        
+        /// Property 3: Branch Operation Consistency
+        /// For any repository and branch name, creating a branch and switching to it should 
+        /// result in the working directory reflecting the branch's target commit.
+        /// **Validates: Requirements 1.4**
+        #[test]
+        fn prop_branch_operation_consistency(
+            branch_names in prop::collection::vec(arb_branch_name(), 1..5),
+            commit_messages in prop::collection::vec(arb_commit_message(), 0..3),
+        ) {
+            tokio_test::block_on(async {
+                let storage = Arc::new(MemoryStorage::new());
+                let repo = Repository::init(storage.clone()).await.unwrap();
+                
+                let initial_head = repo.head().await.unwrap();
+                let mut current_head = initial_head;
+                
+                // Create some commits to have different target commits for branches
+                let author = gitnext_core::Signature {
+                    name: "Test Author".to_string(),
+                    email: "test@example.com".to_string(),
+                    timestamp: chrono::Utc::now().timestamp(),
+                    timezone_offset: 0,
+                };
+                
+                let mut commit_targets = vec![initial_head];
+                
+                // Create additional commits to use as branch targets
+                for (i, message) in commit_messages.iter().enumerate() {
+                    let tree = gitnext_core::Tree::new(vec![]);
+                    let tree_object = gitnext_core::GitObject::Tree(tree);
+                    let tree_id = tree_object.canonical_hash();
+                    storage.store_object(&tree_id, &tree_object).await.unwrap();
+                    
+                    let commit_id = repo.commit(
+                        &tree_id,
+                        vec![current_head],
+                        author.clone(),
+                        author.clone(),
+                        format!("Commit {}: {}", i, message),
+                    ).await.unwrap();
+                    
+                    commit_targets.push(commit_id);
+                    current_head = commit_id;
+                }
+                
+                // Test branch operations for each branch name
+                for (i, branch_name) in branch_names.iter().enumerate() {
+                    // Use different target commits for different branches
+                    let target_commit = commit_targets[i % commit_targets.len()];
+                    
+                    // Create the branch pointing to the target commit
+                    repo.create_branch(branch_name, &target_commit).await.unwrap();
+                    
+                    // Verify the branch was created with correct target
+                    let refs = repo.storage.list_refs().await.unwrap();
+                    let branch_ref = format!("refs/heads/{}", branch_name);
+                    let branch_target = refs.iter()
+                        .find(|r| r.name == branch_ref)
+                        .and_then(|r| match &r.target {
+                            gitnext_storage::ReferenceTarget::Direct(id) => Some(*id),
+                            _ => None,
+                        });
+                    
+                    prop_assert!(branch_target.is_some(), "Branch {} should exist", branch_name);
+                    prop_assert_eq!(branch_target.unwrap(), target_commit, 
+                        "Branch {} should point to target commit", branch_name);
+                    
+                    // Switch to the branch
+                    repo.switch_branch(branch_name).await.unwrap();
+                    
+                    // Verify HEAD now points to the branch's target commit
+                    let new_head = repo.head().await.unwrap();
+                    prop_assert_eq!(new_head, target_commit, 
+                        "After switching to branch {}, HEAD should point to target commit", branch_name);
+                    
+                    // Verify the current branch is correctly tracked
+                    let current_branch = repo.get_current_branch().await.unwrap();
+                    prop_assert_eq!(current_branch, Some(branch_name.clone()), 
+                        "Current branch should be {} after switching", branch_name);
+                    
+                    // Verify the working directory state reflects the target commit
+                    // (In our implementation, this means HEAD points to the correct commit)
+                    let head_commit_object = storage.load_object(&new_head).await.unwrap();
+                    prop_assert!(head_commit_object.is_some(), 
+                        "HEAD commit object should exist after switching to branch {}", branch_name);
+                    
+                    if let Some(gitnext_core::GitObject::Commit(commit)) = head_commit_object {
+                        // Verify the commit structure is intact
+                        prop_assert_eq!(commit.tree.as_bytes().len(), 32, 
+                            "Commit tree should be valid ObjectId");
+                        prop_assert!(!commit.message.is_empty(), 
+                            "Commit message should not be empty");
+                        
+                        // Verify the tree object exists and is accessible
+                        let tree_object = storage.load_object(&commit.tree).await.unwrap();
+                        prop_assert!(tree_object.is_some(), 
+                            "Tree object should exist for commit in branch {}", branch_name);
+                    }
+                }
+                
+                // Test switching between created branches
+                if branch_names.len() > 1 {
+                    for (i, branch_name) in branch_names.iter().enumerate() {
+                        let target_commit = commit_targets[i % commit_targets.len()];
+                        
+                        // Switch to this branch
+                        repo.switch_branch(branch_name).await.unwrap();
+                        
+                        // Verify HEAD points to the correct commit
+                        let head_after_switch = repo.head().await.unwrap();
+                        prop_assert_eq!(head_after_switch, target_commit, 
+                            "HEAD should point to correct commit after switching to branch {}", branch_name);
+                        
+                        // Verify current branch tracking
+                        let current_branch = repo.get_current_branch().await.unwrap();
+                        prop_assert_eq!(current_branch, Some(branch_name.clone()), 
+                            "Current branch tracking should be correct for {}", branch_name);
+                    }
+                }
+                
+                // Test that branch references persist across operations
+                let final_refs = storage.list_refs().await.unwrap();
+                for branch_name in &branch_names {
+                    let branch_ref = format!("refs/heads/{}", branch_name);
+                    let branch_exists = final_refs.iter().any(|r| r.name == branch_ref);
+                    prop_assert!(branch_exists, "Branch {} should still exist at end", branch_name);
+                }
+                
+                // Verify operation log recorded all branch operations
+                let log_refs: Vec<_> = final_refs.iter()
+                    .filter(|r| r.name.starts_with("refs/logs/operations/"))
+                    .collect();
+                
+                // Should have log entries for: init + commits + branch creations + branch switches
+                let expected_min_logs = 1 + commit_messages.len() + branch_names.len() + branch_names.len();
+                prop_assert!(log_refs.len() >= expected_min_logs, 
+                    "Should have at least {} log entries, found {}", expected_min_logs, log_refs.len());
                 
                 Ok(())
             })?;
