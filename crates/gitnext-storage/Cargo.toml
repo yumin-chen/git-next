@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 # Local dependencies
-gitnext-core = { path = "../gitnext-core" }
+gitnext-core = { path = "../gitnext-core", features = ["test-utils"] }
 
 # Workspace dependencies
 async-trait = { workspace = true }
@@ -13,3 +13,10 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+proptest = { workspace = true }
+tokio-test = "0.4"
+sqlx = { workspace = true }
+bincode = { workspace = true }

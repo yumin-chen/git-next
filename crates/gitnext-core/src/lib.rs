@@ -489,8 +489,8 @@ impl fmt::Display for Tag {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "test-utils"))]
+pub mod tests {
     use super::*;
     use proptest::prelude::*;
     
@@ -540,7 +540,7 @@ mod tests {
 
     // Property test generators
     prop_compose! {
-        fn arb_signature()(
+        pub fn arb_signature()(
             name in "[a-zA-Z ]{1,50}",
             email in "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}",
             timestamp in any::<i64>(),
@@ -551,13 +551,13 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_blob()(content in prop::collection::vec(any::<u8>(), 0..1000)) -> Blob {
+        pub fn arb_blob()(content in prop::collection::vec(any::<u8>(), 0..1000)) -> Blob {
             Blob::new(bytes::Bytes::from(content))
         }
     }
 
     prop_compose! {
-        fn arb_tree_entry()(
+        pub fn arb_tree_entry()(
             name in "[a-zA-Z0-9._-]{1,50}",
             mode in prop::sample::select(&[FileMode::Normal, FileMode::Executable, FileMode::Symlink, FileMode::Tree]),
             hash_bytes in prop::array::uniform32(any::<u8>()),
@@ -573,13 +573,13 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_tree()(entries in prop::collection::vec(arb_tree_entry(), 0..10)) -> Tree {
+        pub fn arb_tree()(entries in prop::collection::vec(arb_tree_entry(), 0..10)) -> Tree {
             Tree::new(entries)
         }
     }
 
     prop_compose! {
-        fn arb_commit()(
+        pub fn arb_commit()(
             tree_hash in prop::array::uniform32(any::<u8>()),
             parents in prop::collection::vec(prop::array::uniform32(any::<u8>()), 0..5),
             author in arb_signature(),
@@ -597,7 +597,7 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_tag()(
+        pub fn arb_tag()(
             target_hash in prop::array::uniform32(any::<u8>()),
             target_type in prop::sample::select(&[ObjectType::Blob, ObjectType::Tree, ObjectType::Commit, ObjectType::Tag]),
             name in "[a-zA-Z0-9._-]{1,50}",
@@ -615,7 +615,7 @@ mod tests {
     }
 
     prop_compose! {
-        fn arb_git_object()(
+        pub fn arb_git_object()(
             obj in prop::sample::select(&[0u8, 1, 2, 3]),
             blob in arb_blob(),
             tree in arb_tree(),
