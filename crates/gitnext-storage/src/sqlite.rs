@@ -236,6 +236,20 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     
+    async fn delete_ref(&self, name: &str) -> Result<()> {
+        let result = sqlx::query("DELETE FROM refs WHERE name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::Backend(format!("Failed to delete reference: {}", e)))?;
+        
+        if result.rows_affected() == 0 {
+            return Err(StorageError::RefNotFound { name: name.to_string() });
+        }
+        
+        Ok(())
+    }
+    
     async fn transaction(&self) -> Result<Box<dyn Transaction>> {
         Ok(Box::new(SqliteTransaction::new(self.pool.clone())))
     }

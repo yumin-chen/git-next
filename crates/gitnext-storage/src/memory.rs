@@ -95,6 +95,12 @@ impl Storage for MemoryStorage {
         Ok(())
     }
     
+    async fn delete_ref(&self, name: &str) -> Result<()> {
+        let mut references = self.references.write().map_err(|_| StorageError::Backend("Lock poisoned".to_string()))?;
+        references.remove(name).ok_or_else(|| StorageError::RefNotFound { name: name.to_string() })?;
+        Ok(())
+    }
+    
     async fn transaction(&self) -> Result<Box<dyn Transaction>> {
         let transaction_id = Uuid::new_v4();
         let transaction = MemoryTransaction::new(

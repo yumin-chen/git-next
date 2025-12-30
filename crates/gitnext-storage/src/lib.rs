@@ -48,6 +48,9 @@ pub trait Storage: Send + Sync {
     /// Update a reference to point to a new ObjectId
     async fn update_ref(&self, name: &str, target: &ObjectId) -> Result<()>;
     
+    /// Delete a reference
+    async fn delete_ref(&self, name: &str) -> Result<()>;
+    
     /// Begin a new transaction for atomic operations
     async fn transaction(&self) -> Result<Box<dyn Transaction>>;
 }
